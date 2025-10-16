@@ -172,8 +172,12 @@ client.once('clientReady', async () => {
     
     await loadTickets();
     
+    // Run cleanup on startup to remove orphaned/expired tickets
+    await cleanupOrphanedTickets();
+    
     console.log('\n✅ System ready to handle tickets!\n');
     
+    // Schedule periodic cleanup check
     setInterval(checkAutoCloseTickets, 60 * 60 * 1000);
 });
 
@@ -282,6 +286,103 @@ async function checkAutoCloseTickets() {
                 activeTickets.delete(threadId);
             }
         }
+    }
+}
+
+async function cleanupOrphanedTickets() {
+    const totalTickets = activeTickets.size;
+    console.log(`🧹 Running startup cleanup on ${totalTickets} ticket(s)...`);
+    
+    if (totalTickets === 0) {
+        console.log('✅ Cleanup complete: No tickets to check');
+        return;
+    }
+    
+    const ticketsToRemove = [];
+    let expiredCount = 0;
+    let orphanedCount = 0;
+    let processedCount = 0;
+    
+    // Process tickets in batches to avoid rate limiting
+    const BATCH_SIZE = 10;
+    const BATCH_DELAY_MS = 2000; // 2 seconds between batches
+    
+    const ticketEntries = Array.from(activeTickets.entries());
+    const batches = [];
+    
+    // Split into batches
+    for (let i = 0; i < ticketEntries.length; i += BATCH_SIZE) {
+        batches.push(ticketEntries.slice(i, i + BATCH_SIZE));
+    }
+    
+    console.log(`   Processing ${batches.length} batch(es) of up to ${BATCH_SIZE} tickets each...`);
+    
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        
+        // Process all tickets in this batch concurrently
+        await Promise.all(batch.map(async ([threadId, ticketData]) => {
+            try {
+                // Try to fetch the thread to verify it exists
+                const thread = await client.channels.fetch(threadId);
+                
+                if (!thread) {
+                    console.log(`   ❌ Thread ${threadId} not found - marking for removal`);
+                    ticketsToRemove.push(threadId);
+                    orphanedCount++;
+                    return;
+                }
+                
+                // Check if the ticket is expired
+                const now = Date.now();
+                const autoCloseDuration = config.autoCloseAfterDays * 24 * 60 * 60 * 1000;
+                const timeSinceCreation = now - ticketData.createdAt;
+                
+                if (timeSinceCreation >= autoCloseDuration) {
+                    console.log(`   ⏰ Ticket ${threadId} expired - closing`);
+                    if (!thread.archived) {
+                        await closeTicket(thread, null, 'Auto-closed after 7 days of inactivity');
+                    } else {
+                        activeTickets.delete(threadId);
+                    }
+                    expiredCount++;
+                }
+            } catch (error) {
+                // If we can't fetch the thread, it probably doesn't exist anymore
+                if (error.code === 10003 || error.code === 10008) { // Unknown Channel or Unknown Message
+                    console.log(`   ❌ Thread ${threadId} doesn't exist in server - marking for removal`);
+                    ticketsToRemove.push(threadId);
+                    orphanedCount++;
+                } else {
+                    console.error(`   ⚠️ Error checking ticket ${threadId}:`, error.message);
+                }
+            }
+        }));
+        
+        processedCount += batch.length;
+        
+        // Show progress for large cleanups
+        if (totalTickets > BATCH_SIZE) {
+            console.log(`   Progress: ${processedCount}/${totalTickets} tickets checked`);
+        }
+        
+        // Wait between batches (except for the last one)
+        if (batchIndex < batches.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+        }
+    }
+    
+    // Remove orphaned tickets
+    for (const threadId of ticketsToRemove) {
+        activeTickets.delete(threadId);
+    }
+    
+    // Save the cleaned up state
+    if (ticketsToRemove.length > 0 || expiredCount > 0) {
+        await saveTickets();
+        console.log(`✅ Cleanup complete: Removed ${orphanedCount} orphaned ticket(s), closed ${expiredCount} expired ticket(s)`);
+    } else {
+        console.log('✅ Cleanup complete: No issues found');
     }
 }
 
