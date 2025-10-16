@@ -1,0 +1,19 @@
+// Discord Bot Configuration
+// Copy this file to config.js and fill in your actual values
+
+module.exports = {
+    // Your Discord bot token - Get this from https://discord.com/developers/applications
+    token: 'YOUR_BOT_TOKEN_HERE',
+    
+    // Ticket System Configuration
+    // To get these IDs, enable Developer Mode in Discord (User Settings > Advanced)
+    // Then right-click on roles/channels and select "Copy ID"
+    
+    moderatorRoleId: 'YOUR_MODERATOR_ROLE_ID_HERE',  // Role ID for moderators who can manage tickets
+    verifiedRoleId: 'YOUR_VERIFIED_ROLE_ID_HERE',    // Role ID for verified users
+    ticketChannelId: 'YOUR_TICKET_CHANNEL_ID_HERE',  // Channel ID where the ticket panel will be posted
+    
+    // Ticket Settings
+    autoCloseAfterDays: 7  // Number of days before auto-closing inactive tickets
+};
+

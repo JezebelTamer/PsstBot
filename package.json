@@ -1,0 +1,16 @@
+{
+  "name": "psst-discord-bot",
+  "version": "2.0.0",
+  "description": "Private Support System Tickets (Psst) - A comprehensive Discord ticket system with verification, moderation, and user support features",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "node bot.js"
+  },
+  "keywords": ["discord", "bot", "tickets", "support", "moderation", "verification", "psst", "private-threads"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1"
+  }
+}
