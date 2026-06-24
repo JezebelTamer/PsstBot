@@ -12,7 +12,9 @@ const {
     StringSelectMenuBuilder,
     StringSelectMenuOptionBuilder,
     MessageFlags,
-    Partials
+    Partials,
+    SlashCommandBuilder,
+    PermissionFlagsBits
 } = require('discord.js');
 const config = require('./config.js');
 const fs = require('fs').promises;
@@ -31,7 +33,11 @@ const client = new Client({
 // Data storage
 const activeTickets = new Map();
 const TICKETS_FILE = path.join(__dirname, 'tickets.json');
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 const legitimateAdditions = new Set();
+
+// Per-guild settings (e.g. ticket channel), keyed by guild ID
+const guildSettings = new Map();
 
 // Constants
 const TICKET_REASONS = [
@@ -51,7 +57,16 @@ const COLORS = {
 };
 
 // Helper functions
-const isModerator = (member) => member.roles.cache.has(config.moderatorRoleId);
+const getRoleByName = (guild, name) =>
+    guild.roles.cache.find(role => role.name.toLowerCase() === name.toLowerCase()) || null;
+
+const getModeratorRole = (guild) => getRoleByName(guild, config.moderatorRoleName);
+const getVerifiedRole = (guild) => getRoleByName(guild, config.verifiedRoleName);
+
+const isModerator = (member) => {
+    const role = getModeratorRole(member.guild);
+    return role ? member.roles.cache.has(role.id) : false;
+};
 
 const getUserLevel = (member) => {
     let highestLevel = 0;
@@ -162,6 +177,70 @@ async function loadTickets() {
     }
 }
 
+// Guild settings persistence
+async function loadSettings() {
+    try {
+        const data = await fs.readFile(SETTINGS_FILE, 'utf8');
+        const parsed = JSON.parse(data);
+        for (const [guildId, settings] of Object.entries(parsed)) {
+            guildSettings.set(guildId, settings);
+        }
+        console.log(`⚙️  Loaded settings for ${guildSettings.size} guild(s)`);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            console.log('📝 No settings file found, starting fresh');
+        } else {
+            console.error('Error loading settings:', error);
+        }
+    }
+}
+
+async function saveSettings() {
+    try {
+        const obj = {};
+        for (const [guildId, settings] of guildSettings.entries()) {
+            obj[guildId] = settings;
+        }
+        await fs.writeFile(SETTINGS_FILE, JSON.stringify(obj, null, 2));
+    } catch (error) {
+        console.error('Error saving settings:', error);
+    }
+}
+
+function getTicketChannelId(guildId) {
+    return guildSettings.get(guildId)?.ticketChannelId || null;
+}
+
+async function setTicketChannel(guildId, channelId) {
+    const settings = guildSettings.get(guildId) || {};
+    settings.ticketChannelId = channelId;
+    guildSettings.set(guildId, settings);
+    await saveSettings();
+}
+
+// Slash command definitions
+const slashCommands = [
+    new SlashCommandBuilder()
+        .setName('setup-tickets')
+        .setDescription('Set this channel as the ticket channel and post the ticket panel')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder()
+        .setName('add')
+        .setDescription('Add a user to the current ticket')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('The user to add to this ticket')
+                .setRequired(true))
+].map(command => command.toJSON());
+
+async function registerSlashCommands(guild) {
+    try {
+        await guild.commands.set(slashCommands);
+    } catch (error) {
+        console.error(`Error registering slash commands for guild ${guild.id}:`, error);
+    }
+}
+
 // Event handlers
 client.once('clientReady', async () => {
     console.log('\n╔═══════════════════════════════════════╗');
@@ -170,7 +249,14 @@ client.once('clientReady', async () => {
     console.log('╚═══════════════════════════════════════╝\n');
     console.log(`Logged in as ${client.user.tag}`);
     
+    await loadSettings();
     await loadTickets();
+    
+    // Register slash commands for every guild the bot is in
+    for (const guild of client.guilds.cache.values()) {
+        await registerSlashCommands(guild);
+    }
+    console.log(`🔧 Slash commands registered for ${client.guilds.cache.size} guild(s)`);
     
     // Run cleanup on startup to remove orphaned/expired tickets
     await cleanupOrphanedTickets();
@@ -179,6 +265,11 @@ client.once('clientReady', async () => {
     
     // Schedule periodic cleanup check
     setInterval(checkAutoCloseTickets, 60 * 60 * 1000);
+});
+
+client.on('guildCreate', async (guild) => {
+    await registerSlashCommands(guild);
+    console.log(`🔧 Slash commands registered for new guild ${guild.name}`);
 });
 
 client.on('threadMembersUpdate', async (addedMembers, removedMembers, thread) => {
@@ -197,7 +288,6 @@ client.on('threadMembersUpdate', async (addedMembers, removedMembers, thread) =>
         const recentMessage = messages.find(msg => 
             msg.mentions.users.has(member.id) && 
             msg.author.id !== client.user.id &&
-            !msg.content.toLowerCase().startsWith('!add') &&
             Date.now() - msg.createdTimestamp < 5000
         );
         
@@ -205,7 +295,7 @@ client.on('threadMembersUpdate', async (addedMembers, removedMembers, thread) =>
             try {
                 await thread.members.remove(member.id);
                 await thread.send({
-                    content: `❌ <@${recentMessage.author.id}>, you cannot add members by tagging them. Moderators can use \`!add <username/userid>\` to add members to this ticket.`
+                    content: `❌ <@${recentMessage.author.id}>, you cannot add members by tagging them. Moderators can use the \`/add\` command to add members to this ticket.`
                 });
             } catch (error) {
                 console.error('Error removing tagged member:', error);
@@ -486,7 +576,12 @@ function createTicketControls(reason, claimed = false) {
 
 async function createTicket(guild, creator, reason, moderator = null, onBehalfOf = false) {
     try {
-        const ticketChannel = await guild.channels.fetch(config.ticketChannelId);
+        const ticketChannelId = getTicketChannelId(guild.id);
+        if (!ticketChannelId) {
+            throw new Error('Ticket channel not configured. An administrator must run /setup-tickets.');
+        }
+
+        const ticketChannel = await guild.channels.fetch(ticketChannelId);
         if (!ticketChannel) throw new Error('Ticket channel not found');
 
         const thread = await ticketChannel.threads.create({
@@ -513,8 +608,9 @@ async function createTicket(guild, creator, reason, moderator = null, onBehalfOf
 
         const controls = createTicketControls(reason, !!moderator);
         
+        const moderatorRole = getModeratorRole(guild);
         const initialMessage = await thread.send({ 
-            content: `<@${creator.id}> <@&${config.moderatorRoleId}>`,
+            content: `<@${creator.id}>${moderatorRole ? ` <@&${moderatorRole.id}>` : ''}`,
             embeds: [embed], 
             components: [controls] 
         });
@@ -645,7 +741,9 @@ async function closeTicket(thread, closedBy, reason = 'Ticket closed') {
 // Interaction handlers
 client.on('interactionCreate', async interaction => {
     try {
-        if (interaction.isButton()) {
+        if (interaction.isChatInputCommand()) {
+            await handleSlashCommand(interaction);
+        } else if (interaction.isButton()) {
             await handleButtonInteraction(interaction);
         } else if (interaction.isStringSelectMenu()) {
             await handleSelectMenuInteraction(interaction);
@@ -663,6 +761,74 @@ client.on('interactionCreate', async interaction => {
         }
     }
 });
+
+async function handleSlashCommand(interaction) {
+    const { commandName } = interaction;
+
+    if (commandName === 'setup-tickets') {
+        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+            return interaction.reply({ 
+                content: '❌ You need Administrator permissions to use this command.', 
+                flags: MessageFlags.Ephemeral 
+            });
+        }
+
+        await interaction.reply({ 
+            content: '✅ Setting up ticket panel...', 
+            flags: MessageFlags.Ephemeral 
+        });
+
+        try {
+            await createTicketPanel(interaction.channel);
+            await setTicketChannel(interaction.guildId, interaction.channelId);
+            await interaction.editReply({ 
+                content: '✅ Ticket panel created! This channel is now set as the ticket channel.' 
+            });
+        } catch (error) {
+            console.error('Error creating ticket panel:', error);
+            await interaction.editReply({ 
+                content: '❌ Error creating ticket panel. Please check bot permissions.' 
+            });
+        }
+    }
+
+    if (commandName === 'add') {
+        if (!interaction.channel.isThread() || !activeTickets.has(interaction.channel.id)) {
+            return interaction.reply({ 
+                content: '❌ This command can only be used inside a ticket.', 
+                flags: MessageFlags.Ephemeral 
+            });
+        }
+
+        if (!isModerator(interaction.member)) {
+            return interaction.reply({ 
+                content: '❌ Only moderators can add users to tickets.', 
+                flags: MessageFlags.Ephemeral 
+            });
+        }
+
+        const targetUser = interaction.options.getUser('user');
+
+        try {
+            const addKey = `${interaction.channel.id}-${targetUser.id}`;
+            legitimateAdditions.add(addKey);
+
+            await interaction.channel.members.add(targetUser.id);
+            await interaction.reply({ 
+                content: `✅ Added <@${targetUser.id}> to this ticket.`, 
+                flags: MessageFlags.Ephemeral 
+            });
+
+            setTimeout(() => legitimateAdditions.delete(addKey), 10000);
+        } catch (error) {
+            console.error('Error adding member to thread:', error);
+            await interaction.reply({ 
+                content: '❌ Error adding user to this ticket. Please check bot permissions.', 
+                flags: MessageFlags.Ephemeral 
+            });
+        }
+    }
+}
 
 async function handleButtonInteraction(interaction) {
     const { customId } = interaction;
@@ -840,8 +1006,16 @@ async function handleButtonInteraction(interaction) {
         }
 
         try {
+            const verifiedRole = getVerifiedRole(interaction.guild);
+            if (!verifiedRole) {
+                return interaction.reply({ 
+                    content: `❌ Could not find a role named "${config.verifiedRoleName}". Please create it or update the configuration.`, 
+                    flags: MessageFlags.Ephemeral 
+                });
+            }
+
             const member = await interaction.guild.members.fetch(ticketData.creatorId);
-            await member.roles.add(config.verifiedRoleId);
+            await member.roles.add(verifiedRole.id);
 
             await interaction.reply({ 
                 content: `✅ <@${ticketData.creatorId}> has been verified! Closing ticket...`
@@ -962,65 +1136,5 @@ async function handleModalInteraction(interaction) {
         });
     }
 }
-
-// Message commands
-client.on('messageCreate', async message => {
-    if (message.author.bot) return;
-    if (!message.guild) return;
-
-    if (message.content.toLowerCase() === '!setup-tickets') {
-        if (!message.member || !message.member.permissions.has('Administrator')) {
-            return message.reply('❌ You need Administrator permissions to use this command.');
-        }
-
-        try {
-            const tempMessage = await message.channel.send('✅ Setting up ticket panel...');
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            await createTicketPanel(message.channel);
-        } catch (error) {
-            console.error('Error creating ticket panel:', error);
-            try {
-                const errorMsg = await message.channel.send('❌ Error creating ticket panel. Please check bot permissions.');
-                setTimeout(async () => {
-                    try {
-                        await errorMsg.delete();
-                    } catch { }
-                }, 5000);
-            } catch { }
-        }
-    }
-
-    if (message.content.toLowerCase().startsWith('!add')) {
-        if (!message.channel.isThread() || !activeTickets.has(message.channel.id)) return;
-
-        if (!isModerator(message.member)) {
-            return message.reply('❌ Only moderators can use the `!add` command.');
-        }
-
-        const args = message.content.slice(4).trim();
-        if (!args) {
-            return message.reply('Usage: `!add @user` or `!add <user_id>` or `!add <username>`');
-        }
-
-        const targetUser = await findUser(message.guild, args);
-
-        if (!targetUser) {
-            return message.reply('❌ Could not find that user. Please use a mention, user ID, or username.');
-        }
-
-        try {
-            const addKey = `${message.channel.id}-${targetUser.id}`;
-            legitimateAdditions.add(addKey);
-            
-            await message.channel.members.add(targetUser.id);
-            await message.reply(`✅ Added <@${targetUser.id}> to this ticket.`);
-            
-            setTimeout(() => legitimateAdditions.delete(addKey), 10000);
-        } catch (error) {
-            console.error('Error adding member to thread:', error);
-            await message.reply('❌ Error adding user to this ticket. Please check bot permissions.');
-        }
-    }
-});
 
 client.login(config.token);

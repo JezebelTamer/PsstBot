@@ -10,15 +10,13 @@
 
 ## Setup Steps
 
-### 1. Get Your Discord IDs
+### 1. Create the Required Roles
 
-Enable Developer Mode:
-- User Settings → Advanced → Enable "Developer Mode"
+The bot finds these roles by name, so just make sure they exist in your server:
+- A role named **Moderator** (for staff who manage tickets)
+- A role named **Verified** (granted to verified users)
 
-Then get these IDs by right-clicking and selecting "Copy ID":
-- **Moderator Role**: Server Settings → Roles → Right-click moderator role
-- **Verified Role**: Server Settings → Roles → Right-click verified role
-- **Ticket Channel**: Right-click your support/ticket channel
+The ticket channel does not need to be set up here — you'll configure it later with `/setup-tickets`.
 
 ### 2. Configure the Bot
 
@@ -31,9 +29,8 @@ Edit `config.js` with your values:
 ```javascript
 module.exports = {
     token: 'YOUR_BOT_TOKEN_HERE',
-    moderatorRoleId: '123456789012345678',
-    verifiedRoleId: '123456789012345678',
-    ticketChannelId: '123456789012345678',
+    moderatorRoleName: 'Moderator',
+    verifiedRoleName: 'Verified',
     autoCloseAfterDays: 7
 };
 ```
@@ -69,15 +66,16 @@ Logged in as YourBot#1234
 
 ### 5. Initialize the Ticket Panel
 
-In your ticket channel, type:
+In the channel you want to use for tickets, run:
 ```
-!setup-tickets
+/setup-tickets
 ```
 
 The bot will:
 - Clear the channel
 - Set proper permissions automatically
 - Create the ticket panel with buttons
+- Remember this channel as the ticket channel (saved to `settings.json`)
 
 ### 6. Test It
 
@@ -112,8 +110,8 @@ The bot will:
 ## Quick Reference
 
 ### Commands
-- `!setup-tickets` - Initialize panel (Admin only)
-- `!add <user>` - Add user to ticket (Moderators, in tickets only)
+- `/setup-tickets` - Set the current channel as the ticket channel and post the panel (Admin only)
+- `/add <user>` - Add user to ticket (Moderators, in tickets only)
 
 ### Ticket Reasons
 - Verification (Level 5+)

@@ -42,7 +42,7 @@ A Discord ticket system for managing user verifications, moderation communicatio
 ### 🛡️ Moderation Features
 - **Claim System**: Moderators can claim tickets for one-on-one support
 - **Quick Verify**: Special button for verification tickets to add verified role
-- **Add Members**: `!add <user>` command to safely add users (moderator-only)
+- **Add Members**: `/add <user>` slash command to safely add users (moderator-only)
 - **Tag Protection**: Prevents unauthorized member additions via mentions
 - **Content Archival**: Automatically preserves user-deleted attachments
 
@@ -68,13 +68,12 @@ A Discord ticket system for managing user verifications, moderation communicatio
    Edit `config.js` with your values:
    ```javascript
    token: 'YOUR_BOT_TOKEN'
-   moderatorRoleId: 'YOUR_MODERATOR_ROLE_ID'
-   verifiedRoleId: 'YOUR_VERIFIED_ROLE_ID'
-   ticketChannelId: 'YOUR_TICKET_CHANNEL_ID'
+   moderatorRoleName: 'Moderator'
+   verifiedRoleName: 'Verified'
    ```
 
-   **Get IDs:** Enable Developer Mode in Discord (Settings > Advanced), then right-click roles/channels and select "Copy ID"
-   
+   **Roles:** The bot looks up the moderator and verified roles by name at runtime, so just make sure roles with these names exist in your server. The ticket channel is configured later with `/setup-tickets`.
+
    **⚠️ Security:** `config.js` is gitignored and should never be committed!
 
 3. **Set Bot Role Hierarchy**
@@ -88,8 +87,8 @@ A Discord ticket system for managing user verifications, moderation communicatio
    ```
 
 5. **Initialize Ticket Panel**
-   - Type `!setup-tickets` in your ticket channel
-   - Bot will auto-configure permissions and create the panel
+   - Run `/setup-tickets` in the channel you want to use for tickets
+   - Bot will auto-configure permissions, create the panel, and remember that channel
 
 ## Usage
 
@@ -118,8 +117,8 @@ A Discord ticket system for managing user verifications, moderation communicatio
 - **Verify User** - Add verified role (verification tickets only)
 
 **Commands:**
-- `!setup-tickets` - Initialize ticket panel (Admin only)
-- `!add <@user|username|userid>` - Add user to ticket thread (in tickets)
+- `/setup-tickets` - Set the current channel as the ticket channel and post the panel (Admin only)
+- `/add <user>` - Add user to ticket thread (in tickets)
 
 **Creating Tickets for Users:**
 1. Click "Contact User" button
@@ -143,12 +142,13 @@ In `config.js`:
 ```javascript
 {
     token: 'YOUR_BOT_TOKEN',
-    moderatorRoleId: 'MODERATOR_ROLE_ID',
-    verifiedRoleId: 'VERIFIED_ROLE_ID',
-    ticketChannelId: 'TICKET_CHANNEL_ID',
+    moderatorRoleName: 'Moderator',
+    verifiedRoleName: 'Verified',
     autoCloseAfterDays: 7
 }
 ```
+
+The ticket channel is not stored in `config.js`. It is set per-server with `/setup-tickets` and persisted in `settings.json`.
 
 ## Bot Permissions
 
@@ -177,7 +177,7 @@ Verification and Consent Verification tickets automatically receive detailed ins
 
 ### Thread Privacy
 - Private threads with invite disabled
-- Only moderators can add members via `!add`
+- Only moderators can add members via `/add`
 - Tag protection prevents unauthorized additions
 
 ## Troubleshooting
@@ -206,6 +206,7 @@ Psst/
 ├── config.js.example   # Configuration template
 ├── package.json        # Dependencies
 ├── tickets.json        # Ticket data (auto-created, gitignored)
+├── settings.json       # Per-guild settings, e.g. ticket channel (auto-created)
 ├── screenshots/        # Example screenshots
 ├── README.md           # Documentation
 ├── SETUP_GUIDE.md      # Quick setup guide
